@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Espirales de memoria</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f3f1ec;
+    --ink: #1a1a1a;
+    --muted: #7a7670;
+    --line: rgba(0,0,0,.12);
+    --panel: rgba(243,241,236,.82);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e0e0f;
+    --ink: #ece8e1;
+    --muted: #8a857d;
+    --line: rgba(255,255,255,.14);
+    --panel: rgba(14,14,15,.78);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink);
+    font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; }
+  canvas { display: block; touch-action: none; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
+
+  #panel { position: fixed; top: 16px; left: 16px; width: 250px; padding: 14px 14px 12px;
+    background: var(--panel); backdrop-filter: blur(6px); border: 1px solid var(--line); }
+  #panel.hidden > :not(header) { display: none; }
+  header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  h1 { font-size: 13px; font-weight: 500; margin: 0; letter-spacing: .02em; }
+  .sub { color: var(--muted); font-style: italic; margin: 6px 0 12px; line-height: 1.45; }
+  .row { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+  button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line);
+    padding: 4px 8px; cursor: pointer; }
+  button:hover { border-color: var(--ink); }
+  button.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  #toggle { border: none; padding: 0 2px; color: var(--muted); }
+  label { display: grid; grid-template-columns: 90px 1fr; align-items: center; gap: 6px; margin: 6px 0; color: var(--muted); }
+  input[type=range] { width: 100%; accent-color: var(--ink); }
+  .k { color: var(--muted); font-size: 11px; margin: 10px 0 6px; text-transform: lowercase; letter-spacing: .05em; }
+  form { display: flex; gap: 4px; }
+  input[type=text] { flex: 1; min-width: 0; font: inherit; color: var(--ink); background: transparent;
+    border: 1px solid var(--line); padding: 5px 6px; }
+  input[type=text]:focus { outline: none; border-color: var(--ink); }
+
+  #hint { position: fixed; left: 16px; right: 16px; bottom: 12px; color: var(--muted); font-size: 11px;
+    text-align: center; pointer-events: none; }
+  #hud { position: fixed; top: 16px; right: 16px; color: var(--muted); font-size: 11px; text-align: right; line-height: 1.6; pointer-events: none; }
+
+  @media (max-width: 600px) {
+    #panel { left: 8px; right: 8px; width: auto; top: 8px; }
+    #hud { display: none; }
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="panel">
+  <header><h1>espirales / memorias</h1><button id="toggle" title="ocultar (H)">—</button></header>
+  <p class="sub">parece que solo das vueltas.<br>en realidad estás subiendo.<br>pasa el cursor por un recuerdo y lo cambias.</p>
+
+  <div class="k">forma</div>
+  <div class="row" id="presets">
+    <button data-p="flat">plana</button>
+    <button data-p="helix" class="on">hélice</button>
+    <button data-p="cone">cono</button>
+    <button data-p="vortex">vórtice</button>
+  </div>
+
+  <div class="k">vista</div>
+  <div class="row">
+    <button data-v="top" title="numpad 7">arriba</button>
+    <button data-v="front" title="numpad 1">frente</button>
+    <button data-v="persp" title="libre">libre</button>
+    <button id="ortho" title="numpad 5">orto</button>
+  </div>
+
+  <label>subida <input type="range" id="rise" min="0" max="2" step="0.01"></label>
+  <label>apertura <input type="range" id="spread" min="0" max="2" step="0.01"></label>
+  <label>radio <input type="range" id="R0" min="0" max="24" step="0.1"></label>
+  <label>velocidad <input type="range" id="speed" min="0" max="30" step="0.5" value="7"></label>
+  <label>reescritura <input type="range" id="rate" min="0" max="0.4" step="0.005" value="0.05"></label>
+
+  <div class="k">añade un recuerdo</div>
+  <form id="add">
+    <input type="text" id="mem" maxlength="120" placeholder="algo que recuerdas…" autocomplete="off">
+    <button>+</button>
+  </form>
+
+  <div class="row" style="margin: 10px 0 0;">
+    <button id="pause" title="espacio">pausa</button>
+    <button id="theme">tema</button>
+    <button id="reset" title="volver a los recuerdos originales">olvidar</button>
+  </div>
+</div>
+
+<div id="hud"></div>
+<div id="hint">arrastra: orbitar · shift / botón derecho: mover · rueda: zoom · 7 arriba · 1 frente · 3 lado · 5 orto · 4/6/8/2 girar · . encuadrar · espacio pausa</div>
+
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  const cv = $('#c'), ctx = cv.getContext('2d');
+  let W, H, DPR;
+  function resize() {
+    DPR = Math.min(devicePixelRatio || 1, 2);
+    W = innerWidth; H = innerHeight;
+    cv.width = W * DPR; cv.height = H * DPR;
+    cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  }
+  addEventListener('resize', resize); resize();
+
+  // ---------- memories ----------
+  const DEFAULTS = [
+    'el olor de la casa de mi abuela',
+    'the summer we didn’t know was the last',
+    'volvía siempre al mismo banco del parque',
+    'your voice on the phone, slightly delayed',
+    'no sé si llovía o si lo he inventado',
+    'we were laughing about something, I forget what',
+    'la luz de las cinco en la cocina',
+    'every time I remember it, it changes a little',
+    'caminábamos sin saber hacia dónde',
+    'a song I can only hum the middle of',
+    'parecía que no pasaba nada',
+    'pero ya estábamos yendo hacia adelante',
+  ];
+  // every memory, as it is now: touching a memory rewrites it for good
+  const STORE = 'spirals.frases';
+  let phrases = null;
+  try { phrases = JSON.parse(localStorage.getItem(STORE)); } catch (e) {}
+  if (!Array.isArray(phrases) || !phrases.length) {
+    let mine = [];
+    try { mine = JSON.parse(localStorage.getItem('spirals.memorias') || '[]'); } catch (e) {}
+    phrases = [...DEFAULTS, ...mine];
+  }
+  let saveTimer = 0;
+  function save() {
+    if (saveTimer) return;
+    saveTimer = setTimeout(() => {
+      saveTimer = 0;
+      try { localStorage.setItem(STORE, JSON.stringify(phrases)); } catch (e) {}
+    }, 500);
+  }
+  const urgent = [];           // indices of newly added memories, which enter next
+  let phraseIdx = 0;
+  const SEP = '   ·   ';
+
+  // stream of characters, indexed by absolute k; each remembers where it came from
+  let base = 0, chars = [], fromP = [], fromC = [];
+  function nextPhrase() {
+    const pi = urgent.length ? urgent.shift() : phraseIdx++ % phrases.length;
+    const text = [...phrases[pi]];
+    text.forEach((c, ci) => { chars.push(c); fromP.push(pi); fromC.push(ci); });
+    for (const c of SEP) { chars.push(c); fromP.push(-1); fromC.push(-1); }
+  }
+  function charAt(k) {
+    while (k >= base + chars.length) nextPhrase();
+    return chars[k - base];
+  }
+  function trim(minK) {
+    const drop = minK - base - 200;
+    if (drop > 500) { chars.splice(0, drop); fromP.splice(0, drop); fromC.splice(0, drop); base += drop; }
+  }
+
+  // ---------- mutation: memories reshape each time you come back around ----------
+  function hash(a, b) {
+    let x = (Math.imul(a, 374761393) + Math.imul(b, 668265263)) | 0;
+    x = Math.imul(x ^ (x >>> 13), 1274126177);
+    return ((x ^ (x >>> 16)) >>> 0) / 4294967296;
+  }
+  const SIMILAR = { a:'oáeq', b:'dhp', c:'eo', d:'bq', e:'caé', f:'tl', g:'qy', h:'nb', i:'lj!í',
+    j:'i', k:'hx', l:'i1', m:'nw', n:'mhu', o:'caø', p:'qb', q:'gp', r:'nt', s:'z', t:'f', u:'vn',
+    v:'uy', w:'m', x:'k', y:'v', z:'s', 'ñ':'n', 'á':'a', 'é':'e', 'í':'i', 'ó':'o', 'ú':'u' };
+  const LETTERS = 'abcdefghijklmnopqrstuvwxyz';
+  let rate = 0.05;
+  // touching a letter rewrites it here and in the memory it came from
+  const touchedAt = new Map();
+  function touch(k, now) {
+    const i = k - base, pi = fromP[i];
+    if (i < 0 || pi < 0) return;
+    const r = Math.random(), low = chars[i].toLowerCase();
+    let ch;
+    if (r < 0.5 && SIMILAR[low]) ch = SIMILAR[low][(Math.random() * SIMILAR[low].length) | 0];
+    else if (r < 0.85) ch = LETTERS[(Math.random() * 26) | 0];
+    else ch = ' ';                                     // touched too much: gone
+    chars[i] = ch;
+    touchedAt.set(k, now);
+    const text = [...phrases[pi]];
+    if (fromC[i] < text.length) { text[fromC[i]] = ch; phrases[pi] = text.join(''); save(); }
+  }
+
+  // returns [charAtLoopL, charAtLoopL-1]
+  function mutate(k, ch, L) {
+    let prev = ch;
+    const n = Math.min(L, 60);
+    for (let l = 1; l <= n; l++) {
+      prev = ch;
+      if (ch === '·') continue;
+      if (hash(k, l * 3 + 1) >= rate) continue;
+      const r = hash(k, l * 3 + 2), r2 = hash(k, l * 3 + 3);
+      if (ch === ' ') { if (r < 0.06) ch = LETTERS[(r2 * 26) | 0]; continue; }
+      const low = ch.toLowerCase();
+      if (r < 0.55 && SIMILAR[low]) { const s = SIMILAR[low]; ch = s[(r2 * s.length) | 0]; }
+      else if (r < 0.78) ch = LETTERS[(r2 * 26) | 0];
+      else ch = ' ';                                   // forgotten
+    }
+    return [ch, prev];
+  }
+
+  // ---------- spiral geometry ----------
+  const N = 1300;                 // visible characters along the path
+  const STEP = 1;                 // world distance between characters
+  const FONT_WORLD = 1.55;
+  const PRESETS = {
+    flat:   { R0: 3,  spread: 1.05, rise: 0 },
+    helix:  { R0: 11, spread: 0,    rise: 0.75 },
+    cone:   { R0: 2,  spread: 0.55, rise: 0.6 },
+    vortex: { R0: 1,  spread: 0.25, rise: 1.4 },
+  };
+  const P = { ...PRESETS.helix }, G = { ...PRESETS.helix };
+  const theta = new Float32Array(N + 2);
+  function buildTable() {
+    theta[0] = 0;
+    for (let i = 1; i < theta.length; i++) {
+      const t = theta[i - 1], r = P.R0 + P.spread * t;
+      const d = Math.sqrt(r * r + P.spread * P.spread + P.rise * P.rise) || 1;
+      theta[i] = t + Math.min(STEP / d, 1);
+    }
+  }
+  function thetaAt(p) {
+    const i = Math.floor(p), f = p - i;
+    if (i < 0) return theta[0];
+    if (i >= N + 1) return theta[N + 1];
+    return theta[i] + (theta[i + 1] - theta[i]) * f;
+  }
+  const out = [0, 0, 0];
+  function world(t) {
+    const r = P.R0 + P.spread * t;
+    out[0] = r * Math.cos(t); out[1] = P.rise * t; out[2] = -r * Math.sin(t);
+    return out;
+  }
+
+  // ---------- camera (blender-ish orbit) ----------
+  const cam = { yaw: 0.6, pitch: 0.35, dist: 120, tx: 0, ty: 0, tz: 0, ortho: false };
+  const goal = { ...cam };
+  let autoFrame = true;
+  function extents() {
+    const tm = theta[N];
+    return { r: P.R0 + P.spread * tm, h: P.rise * tm };
+  }
+  function frame() {
+    const e = extents();
+    const sp = Math.abs(Math.sin(goal.pitch)), cp = Math.abs(Math.cos(goal.pitch));
+    goal.dist = Math.max((e.h * cp + 2 * e.r) * 0.85 + 10, e.h / 2 * sp + 2.2 * e.r + 5, 30);
+    goal.tx = 0; goal.tz = 0; goal.ty = e.h / 2;
+  }
+  function setView(v) {
+    autoFrame = true;
+    if (v === 'top')    { goal.pitch = Math.PI / 2; }
+    if (v === 'bottom') { goal.pitch = -Math.PI / 2; }
+    if (v === 'front')  { goal.pitch = 0; goal.yaw = nearestYaw(0); }
+    if (v === 'right')  { goal.pitch = 0; goal.yaw = nearestYaw(Math.PI / 2); }
+    if (v === 'persp')  { goal.pitch = 0.35; goal.yaw = nearestYaw(0.6); if (goal.ortho) toggleOrtho(); }
+    frame();
+    document.querySelectorAll('[data-v]').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+  }
+  function nearestYaw(y) {
+    const TAU = Math.PI * 2;
+    return y + Math.round((goal.yaw - y) / TAU) * TAU;
+  }
+  function toggleOrtho() {
+    goal.ortho = cam.ortho = !cam.ortho;
+    $('#ortho').classList.toggle('on', cam.ortho);
+  }
+
+  // ---------- interaction ----------
+  const pointers = new Map();
+  const hover = { x: 0, y: 0, on: false, tap: 0 };
+  const BRUSH = 26;
+  cv.addEventListener('pointermove', e => { hover.x = e.clientX; hover.y = e.clientY; hover.on = true; });
+  cv.addEventListener('pointerleave', () => { hover.on = false; });
+  let mode = null, pinch0 = 0;
+  cv.addEventListener('contextmenu', e => e.preventDefault());
+  cv.addEventListener('pointerdown', e => {
+    cv.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    mode = (e.shiftKey || e.button === 2) ? 'pan' : e.ctrlKey ? 'zoom' : 'orbit';
+    if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinch0 = Math.hypot(a.x - b.x, a.y - b.y); }
+    cv.classList.add('dragging');
+    hover.down = { x: e.clientX, y: e.clientY };
+    document.querySelectorAll('[data-v]').forEach(b => b.classList.remove('on'));
+  });
+  cv.addEventListener('pointermove', e => {
+    const p = pointers.get(e.pointerId);
+    if (!p) return;
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    p.x = e.clientX; p.y = e.clientY;
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinch0) goal.dist *= pinch0 / d;
+      pinch0 = d; autoFrame = false;
+      return;
+    }
+    if (mode === 'orbit') {
+      goal.yaw -= dx * 0.006;
+      goal.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, goal.pitch + dy * 0.006));
+    } else if (mode === 'pan') {
+      const k = goal.dist / (H * 0.9);
+      const cy = Math.cos(goal.yaw), sy = Math.sin(goal.yaw);
+      const sp = Math.sin(goal.pitch), cp = Math.cos(goal.pitch);
+      // right = (cy,0,-sy), up = (-sp*sy, cp, -sp*cy)
+      goal.tx += (-dx * cy + dy * -sp * sy) * k;
+      goal.ty += (dy * cp) * k;
+      goal.tz += (dx * sy + dy * -sp * cy) * k;
+      autoFrame = false;
+    } else if (mode === 'zoom') {
+      goal.dist *= Math.exp(dy * 0.005); autoFrame = false;
+    }
+  });
+  const up = e => {
+    const d = hover.down;
+    if (d && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 6) { hover.x = e.clientX; hover.y = e.clientY; hover.tap = 3; }
+    hover.down = null;
+    if (e.pointerType !== 'mouse') hover.on = false;
+    pointers.delete(e.pointerId); pinch0 = 0; if (!pointers.size) cv.classList.remove('dragging'); };
+  cv.addEventListener('pointerup', up);
+  cv.addEventListener('pointercancel', up);
+  cv.addEventListener('wheel', e => {
+    e.preventDefault();
+    goal.dist = Math.max(3, Math.min(2000, goal.dist * Math.exp(e.deltaY * 0.0012)));
+    autoFrame = false;
+  }, { passive: false });
+
+  let paused = false;
+  function togglePause() { paused = !paused; $('#pause').classList.toggle('on', paused); }
+
+  addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT') return;
+    const c = e.code, s = 0.2618;
+    if (c === 'Numpad7' || c === 'Digit7') setView(e.ctrlKey ? 'bottom' : 'top');
+    else if (c === 'Numpad1' || c === 'Digit1') setView('front');
+    else if (c === 'Numpad3' || c === 'Digit3') setView('right');
+    else if (c === 'Numpad5' || c === 'Digit5') toggleOrtho();
+    else if (c === 'Numpad4' || c === 'Digit4') goal.yaw += s;
+    else if (c === 'Numpad6' || c === 'Digit6') goal.yaw -= s;
+    else if (c === 'Numpad8' || c === 'Digit8') goal.pitch = Math.min(Math.PI / 2, goal.pitch + s);
+    else if (c === 'Numpad2' || c === 'Digit2') goal.pitch = Math.max(-Math.PI / 2, goal.pitch - s);
+    else if (c === 'NumpadDecimal' || c === 'Period' || c === 'Home') { autoFrame = true; frame(); }
+    else if (c === 'Space') { e.preventDefault(); togglePause(); }
+    else if (c === 'KeyH') $('#panel').classList.toggle('hidden');
+    else return;
+    if (/Numpad[2468]|Digit[2468]/.test(c)) document.querySelectorAll('[data-v]').forEach(b => b.classList.remove('on'));
+  });
+
+  // ---------- UI ----------
+  const sliders = ['rise', 'spread', 'R0'];
+  function syncSliders() { for (const id of sliders) $('#' + id).value = G[id]; }
+  sliders.forEach(id => $('#' + id).addEventListener('input', e => {
+    G[id] = +e.target.value; autoFrame = true;
+    document.querySelectorAll('[data-p]').forEach(b => b.classList.remove('on'));
+  }));
+  document.querySelectorAll('[data-p]').forEach(b => b.addEventListener('click', () => {
+    Object.assign(G, PRESETS[b.dataset.p]); syncSliders(); autoFrame = true;
+    document.querySelectorAll('[data-p]').forEach(x => x.classList.toggle('on', x === b));
+  }));
+  document.querySelectorAll('[data-v]').forEach(b => b.addEventListener('click', () => setView(b.dataset.v)));
+  $('#ortho').addEventListener('click', toggleOrtho);
+  $('#pause').addEventListener('click', togglePause);
+  let speed = +$('#speed').value;
+  $('#speed').addEventListener('input', e => speed = +e.target.value);
+  $('#rate').addEventListener('input', e => rate = +e.target.value);
+  $('#toggle').addEventListener('click', () => $('#panel').classList.toggle('hidden'));
+  $('#theme').addEventListener('click', () => {
+    const r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === 'dark' ? 'light' : 'dark';
+    try { localStorage.setItem('spirals.theme', r.dataset.theme); } catch (e) {}
+  });
+  try { const t = localStorage.getItem('spirals.theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  $('#add').addEventListener('submit', e => {
+    e.preventDefault();
+    const v = $('#mem').value.trim();
+    if (!v) return;
+    phrases.push(v); urgent.push(phrases.length - 1); save();
+    $('#mem').value = '';
+  });
+  $('#reset').addEventListener('click', () => {
+    if (!confirm('¿Volver a los recuerdos originales? Se pierden los cambios y los recuerdos añadidos.')) return;
+    phrases = [...DEFAULTS];
+    try { localStorage.removeItem(STORE); localStorage.removeItem('spirals.memorias'); } catch (e) {}
+    base = 0; chars = []; fromP = []; fromC = []; phraseIdx = 0; urgent.length = 0; offset = N;
+  });
+  syncSliders();
+
+  // ---------- render ----------
+  const sx = new Float32Array(N + 1), sy = new Float32Array(N + 1), sz = new Float32Array(N + 1);
+  const ang = new Float32Array(N + 1), size = new Float32Array(N + 1), alpha = new Float32Array(N + 1);
+  const glyph = new Array(N + 1), kOf = new Float64Array(N + 1);
+  const order = new Uint16Array(N + 1);
+  let offset = N, last = performance.now(), count = 0;
+
+  function project(x, y, z, o) {
+    // camera basis
+    const dx = x - camE[0], dy = y - camE[1], dz = z - camE[2];
+    const cx = dx * R[0] + dy * R[1] + dz * R[2];
+    const cy = dx * U[0] + dy * U[1] + dz * U[2];
+    const cz = dx * F[0] + dy * F[1] + dz * F[2];
+    const s = cam.ortho ? focal / cam.dist : focal / cz;
+    o[0] = W / 2 + cx * s; o[1] = H / 2 - cy * s; o[2] = cz; o[3] = s;
+  }
+  const camE = [0, 0, 0], R = [0, 0, 0], U = [0, 0, 0], F = [0, 0, 0];
+  let focal = 1;
+  const pa = [0, 0, 0, 0], pb = [0, 0, 0, 0];
+
+  function tick(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    if (!paused) offset += speed * dt;
+
+    // ease shape + camera
+    const ks = 1 - Math.exp(-dt * 2.5), kc = 1 - Math.exp(-dt * 10);
+    for (const k of sliders) P[k] += (G[k] - P[k]) * ks;
+    buildTable();
+    if (autoFrame) frame();
+    for (const k of ['yaw', 'pitch', 'dist', 'tx', 'ty', 'tz']) cam[k] += (goal[k] - cam[k]) * (k === 'dist' || k[0] === 't' ? ks * 1.6 : kc);
+
+    const cp = Math.cos(cam.pitch), spp = Math.sin(cam.pitch), cyw = Math.cos(cam.yaw), syw = Math.sin(cam.yaw);
+    camE[0] = cam.tx + cam.dist * cp * syw; camE[1] = cam.ty + cam.dist * spp; camE[2] = cam.tz + cam.dist * cp * cyw;
+    F[0] = -cp * syw; F[1] = -spp; F[2] = -cp * cyw;
+    R[0] = cyw; R[1] = 0; R[2] = -syw;
+    U[0] = R[1] * F[2] - R[2] * F[1]; U[1] = R[2] * F[0] - R[0] * F[2]; U[2] = R[0] * F[1] - R[1] * F[0];
+    focal = Math.min(W, H) * 0.95;
+
+    // lay out characters
+    const k0 = Math.floor(offset);
+    const frac = offset - k0;
+    const TAU = Math.PI * 2;
+    count = 0;
+    let maxLoop = 0;
+    for (let j = 0; j <= N; j++) {
+      const k = k0 - j;                // absolute character index
+      if (k < 0) break;
+      const p = j + frac;              // position along the path
+      if (p > N) break;
+      const t = thetaAt(p);
+      const w = world(t);
+      project(w[0], w[1], w[2], pa);
+      if (!cam.ortho && pa[2] < 0.5) continue;
+      const tb = thetaAt(Math.max(0, p - 0.4));
+      const wb = world(tb);
+      project(wb[0], wb[1], wb[2], pb);
+      const px = pa[3] * FONT_WORLD;
+      if (px < 1.2) continue;
+
+      const loops = t / TAU, L = Math.floor(loops);
+      if (L > maxLoop) maxLoop = L;
+      const [ch, prev] = mutate(k, charAt(k), L);
+      let g = ch;
+      // flicker as a memory is revisited and rewritten
+      if (ch !== prev && loops - L < 0.06) g = LETTERS[(hash(k, (now / 60) | 0) * 26) | 0];
+      const tt = touchedAt.get(k);
+      if (tt !== undefined) { if (now - tt < 180) g = LETTERS[(hash(k, (now / 40) | 0) * 26) | 0]; else touchedAt.delete(k); }
+      if (g === ' ') continue;
+
+      const fadeIn = Math.min(1, p / 25);
+      const fadeOut = 1 - smooth(N * 0.55, N, p);   // the oldest disappear
+      let fog = 1;
+      if (!cam.ortho) fog = Math.max(0.12, Math.min(1, 1.35 - (pa[2] - cam.dist) / (cam.dist * 0.9)));
+      const a = fadeIn * fadeOut * fog;
+      if (a < 0.02) continue;
+
+      sx[count] = pa[0]; sy[count] = pa[1]; sz[count] = pa[2];
+      ang[count] = Math.atan2(pb[1] - pa[1], pb[0] - pa[0]);
+      size[count] = px; alpha[count] = a; glyph[count] = g; kOf[count] = k;
+      order[count] = count; count++;
+    }
+    // touch: while the cursor rests on letters (not while orbiting), they get rewritten
+    const brushing = (hover.on && !pointers.size) || hover.tap > 0;
+    if (brushing) {
+      for (let i = 0; i < count; i++) {
+        if (Math.hypot(sx[i] - hover.x, sy[i] - hover.y) > BRUSH) continue;
+        if (hover.tap > 0 ? Math.random() < 0.6 : Math.random() < dt * 2.5) touch(kOf[i], now);
+      }
+      if (hover.tap > 0) hover.tap--;
+    }
+    trim(k0 - N - 10);
+
+    // draw, far to near
+    const ord = order.subarray(0, count).sort((a, b) => sz[b] - sz[a]);
+    const css = getComputedStyle(document.documentElement);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = css.getPropertyValue('--bg');
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.fillStyle = css.getPropertyValue('--ink');
+    ctx.font = '500 32px "IBM Plex Mono", monospace';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (let i = 0; i < count; i++) {
+      const n = ord[i];
+      const s = size[n] / 32 * DPR, c = Math.cos(ang[n]) * s, si = Math.sin(ang[n]) * s;
+      ctx.setTransform(c, si, -si, c, sx[n] * DPR, sy[n] * DPR);
+      ctx.globalAlpha = alpha[n];
+      ctx.fillText(glyph[n], 0, 0);
+    }
+    ctx.globalAlpha = 1;
+    if (hover.on && !pointers.size) {
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      ctx.strokeStyle = css.getPropertyValue('--muted');
+      ctx.globalAlpha = 0.5;
+      ctx.beginPath(); ctx.arc(hover.x, hover.y, BRUSH, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    const e = extents();
+    $('#hud').innerHTML = `vuelta ${maxLoop}<br>altura ${e.h.toFixed(0)}<br>${cam.ortho ? 'ortográfica' : 'perspectiva'}`;
+    requestAnimationFrame(tick);
+  }
+  function smooth(a, b, x) { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); }
+
+  buildTable(); frame(); Object.assign(cam, goal);
+  if (location.hash) { setView(location.hash.slice(1)); Object.assign(cam, goal); }
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
